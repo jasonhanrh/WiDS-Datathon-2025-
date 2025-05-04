@@ -50,6 +50,9 @@ The final dataset comprises 1,104 observations and over 20,000 features, and was
 
 # 3. Exploratory Data Analysis (EDA)
 
+*Note: The exploratory data analysis (EDA) presented in this section was conducted by my teammate and integrated here with light modifications.*
+
+
 ## 3.1 Demographic Variable Distributions
 
 We began by examining categorical metadata to understand the demographic makeup of the dataset. Frequency counts and bar plots reveal the distribution across variables such as sex, race, handedness, study site, and parental education.
