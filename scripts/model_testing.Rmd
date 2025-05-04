@@ -1,0 +1,59 @@
+---
+title: "Untitled"
+author: "Ruihang_Han"
+date: "2025-05-03"
+output: html_document
+---
+
+```{r}
+# --- Step 0: Load preprocessed test data ---
+test_df <- readRDS("test_df.rds")
+
+# --- Step 1: Apply PCA (use training PCA loadings) ---
+test_pc <- predict(pcs, select(test_df, starts_with("V")) %>%
+                     scale(center = pcs$center, scale = pcs$scale))[, 1:n_pcs_90] %>%
+  as_tibble() %>%
+  mutate(participant_id = test_df$participant_id)
+
+# --- Step 2: Prepare and encode metadata ---
+test_meta_prepped <- prepare_meta(test_df)
+test_meta_enc <- bind_cols(
+  as_tibble(encode(test_meta_prepped %>% select(-participant_id))),
+  tibble(participant_id = test_meta_prepped$participant_id)
+)
+
+# --- Step 3: Merge PCA and metadata ---
+test_merged <- inner_join(test_pc, test_meta_enc, by = "participant_id")
+
+# Ensure test uses the same feature set and column order as training
+X_test <- test_merged %>% select(all_of(colnames(X_train_lasso_pca)))
+
+# --- Step 4: Generate base model predictions ---
+
+# Ridge prediction
+ridge_test_pred <- predict(cv_ridge_lasso_pca, 
+                           newx = as.matrix(X_test), 
+                           s = "lambda.min") %>% 
+  as.vector()
+
+# XGBoost prediction (ensure no column names)
+X_test_mat <- as.matrix(X_test)
+colnames(X_test_mat) <- NULL
+xgb_test_pred <- predict(xgb_final, newdata = xgb.DMatrix(X_test_mat))
+
+# --- Step 5: Stacking Ensemble Prediction ---
+stack_test_input <- data.frame(
+  Ridge = ridge_test_pred,
+  XGB = xgb_test_pred
+)
+stack_test_dmat <- xgb.DMatrix(as.matrix(stack_test_input))
+stack_test_pred <- predict(meta_xgb, newdata = stack_test_dmat)
+
+
+
+
+
+
+
+```
+

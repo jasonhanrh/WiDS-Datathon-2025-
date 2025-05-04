@@ -1,0 +1,68 @@
+---
+title: "Untitled"
+author: "Ruihang_Han"
+date: "2025-05-03"
+output: html_document
+---
+
+```{r}
+# --------------------------------------------------
+# WiDS 2025 - Parallel processing for test set: extract upper triangle + merge metadata
+# --------------------------------------------------
+
+library(tidyverse)
+library(readr)
+library(stringr)
+library(fs)
+library(furrr)
+library(future)
+
+# 1. Set file paths (✅ update to test set)
+metadata_path <- "metadata/test_metadata.csv"
+tsv_dir <- "test_tsv"
+output_path_csv <- "test_df.csv"
+output_path_rds <- "test_df.rds"
+
+# 2. Enable multi-core parallelism
+plan(multisession, workers = parallel::detectCores())
+
+# 3. Read test set metadata
+test_meta <- read_csv(metadata_path, show_col_types = FALSE)
+
+# 4. Filter .tsv files that match participant_id in metadata
+tsv_files_all <- dir_ls(tsv_dir, glob = "*.tsv")
+valid_files <- tsv_files_all[
+  map_chr(tsv_files_all, ~ str_extract(basename(.x), "(?<=sub-)[^_]+")) %in% test_meta$participant_id
+]
+
+# 5. Define extraction function: get upper triangle vector and label as V1, V2, ...
+extract_tsv_row <- function(file) {
+  pid <- str_extract(basename(file), "(?<=sub-)[^_]+")
+  mat <- tryCatch(
+    as.matrix(read_tsv(file, col_names = FALSE, progress = FALSE)),
+    error = function(e) return(NULL)
+  )
+  if (is.null(mat)) return(NULL)
+  vec <- mat[upper.tri(mat)]
+  tibble(participant_id = pid,
+         !!!set_names(as.list(vec), paste0("V", seq_along(vec))))
+}
+
+# 6. Run parallel feature extraction
+test_features <- future_map(valid_files, extract_tsv_row, .progress = TRUE) %>%
+  compact() %>% bind_rows()
+
+# 7. Join with metadata
+test_df <- test_features %>%
+  inner_join(test_meta, by = "participant_id")
+
+# 8. Save result as CSV and RDS
+write_csv(test_df, output_path_csv)
+saveRDS(test_df, output_path_rds)
+
+cat("✅ Test set processed:", nrow(test_df), "rows saved to:\n",
+    "→ ", output_path_csv, "\n",
+    "→ ", output_path_rds, "\n")
+
+```
+

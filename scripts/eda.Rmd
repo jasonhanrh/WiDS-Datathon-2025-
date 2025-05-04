@@ -1,0 +1,198 @@
+---
+title: "EDA"
+author: "Chenran Zhang"
+date: "2025-04-23"
+output: html_document
+---
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(GGally)
+
+# read data
+train_df <- read.csv("train_df.csv")
+```
+
+
+check data structure
+```{r}
+dim(train_df)
+
+# 查看列名（前 20 和后 20）
+colnames(train_df)[1:20]
+tail(colnames(train_df), 20)
+
+# 查看前几行（只看基本信息）
+head(train_df[, 1:10])
+
+# 查看每一列的数据类型（压缩显示为频数）
+sapply(train_df, class) %>% table()
+
+# 只看前 200 个数值变量的描述统计
+numeric_cols <- names(train_df)[sapply(train_df, is.numeric)]
+summary(train_df[, numeric_cols[1:200]])
+```
+
+Check missing values
+```{r}
+# 缺失值总量与比例
+total_missing <- sum(is.na(train_df))
+missing_ratio <- total_missing / (nrow(train_df) * ncol(train_df))
+cat("总缺失值数量:", total_missing, "\n")
+cat("缺失比例:", round(missing_ratio * 100, 2), "%\n")
+
+# 每列缺失值前 10 名
+missing_cols <- colSums(is.na(train_df))
+missing_cols[missing_cols > 0] %>% sort(decreasing = TRUE) %>% head(10)
+```
+
+变量distribution
+```{r}
+# 分类统计
+table(train_df$sex)
+table(train_df$race)
+table(train_df$handedness)
+table(train_df$study_site)
+table(train_df$ethnicity)
+table(train_df$parent_1_education)
+table(train_df$parent_2_education)
+
+# visualization
+ggplot(train_df, aes(x = sex)) + geom_bar(fill = "#66c2a5") + labs(title = "Sex Distribution") + theme_minimal()
+ggplot(train_df, aes(x = race)) + geom_bar(fill = "#fc8d62") + labs(title = "Race Distribution") + theme_minimal()
+ggplot(train_df, aes(x = handedness)) + geom_bar(fill = "#8da0cb") + labs(title = "Handedness Distribution") + theme_minimal()
+ggplot(train_df, aes(x = study_site)) + geom_bar(fill = "#e78ac3") + labs(title = "Study Site Distribution") + theme_minimal()
+ggplot(train_df, aes(x = parent_1_education)) + geom_bar(fill = "darkgreen") + labs(title = "Parent 1 Education Level", x = "Education Level") + theme(axis.text.x = element_text(angle = 45, hjust = 1)) + theme_minimal()
+
+```
+
+连续变量概况（数值型变量）
+```{r}
+# 连续变量的基本统计（年龄、BMI、心理评分）
+train_df %>% 
+  select(age, bmi, p_factor_fs, internalizing_fs, externalizing_fs, attention_fs) %>%
+  summary()
+```
+
+连续变量可视化
+```{r}
+# 年龄分布（按性别）
+ggplot(train_df, aes(x = age, fill = as.factor(sex))) +
+  geom_histogram(position = "dodge", bins = 30) +
+  labs(title = "Age Distribution by Sex", x = "Age", fill = "Sex") +
+  theme_minimal()
+
+# BMI vs Age（按性别），颜色表示性别
+ggplot(train_df, aes(x = age, y = bmi, color = as.factor(sex))) +
+  geom_point(alpha = 0.5) +
+  labs(title = "BMI vs Age by Sex", x = "Age", y = "BMI", color = "Sex") +
+  theme_minimal()
+
+# BMI 在不同种族中的分布
+ggplot(train_df, aes(x = race, y = bmi, fill = race)) +
+  geom_boxplot() +
+  labs(title = "BMI Distribution by Race") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+心理评分相关性与分布
+```{r}
+# 心理健康评分相关性矩阵
+train_df %>%
+  select(p_factor_fs, internalizing_fs, externalizing_fs, attention_fs) %>%
+  ggpairs(title = "Correlation between Mental Health Factors")
+
+# 箱型图展示心理评分分布
+train_df %>%
+  select(p_factor_fs, internalizing_fs, externalizing_fs, attention_fs) %>%
+  pivot_longer(cols = everything(), names_to = "Factor", values_to = "Score") %>%
+  ggplot(aes(x = Factor, y = Score)) +
+  geom_boxplot(fill = "lightblue") +
+  labs(title = "Distribution of Mental Health Scores") +
+  theme_minimal()
+
+# 年龄和心理因子之间的关系（年龄与 P-factor 散点 + 回归线）
+ggplot(train_df, aes(x = age, y = p_factor_fs)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", se = TRUE, color = "blue") +
+  labs(title = "Age vs P-Factor", y = "P-Factor") +
+  theme_minimal()
+
+# 性别与心理因子的均值差异柱状图（带误差条的柱状图）
+train_df %>%
+  group_by(sex) %>%
+  summarise(
+    p_factor = mean(p_factor_fs, na.rm = TRUE),
+    internalizing = mean(internalizing_fs, na.rm = TRUE),
+    externalizing = mean(externalizing_fs, na.rm = TRUE),
+    attention = mean(attention_fs, na.rm = TRUE)
+  ) %>%
+  pivot_longer(-sex, names_to = "Factor", values_to = "Mean_Score") %>%
+  ggplot(aes(x = Factor, y = Mean_Score, fill = sex)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Mental Health Score by Sex") +
+  theme_minimal()
+
+# Attention Score 按性别
+ggplot(train_df, aes(x = sex, y = attention_fs, fill = sex)) +
+  geom_boxplot() +
+  labs(title = "Attention Score by Sex", x = "Sex", y = "Attention Factor Score") +
+  theme_minimal()
+
+```
+
+类别变量联合关系图
+```{r}
+# Mosaic Plot: Sex vs Race
+library(ggmosaic)
+
+ggplot(data = train_df) +
+  geom_mosaic(aes(weight = 1, x = product(sex), fill = race)) +
+  labs(title = "Mosaic Plot: Sex vs Race", x = "Sex", fill = "Race") +
+  theme_minimal()
+
+```
+
+连续变量相关性热图
+```{r}
+library(corrplot)
+
+selected_vars <- train_df %>%
+  select(age, bmi, p_factor_fs, internalizing_fs, externalizing_fs, attention_fs)
+
+cor_matrix <- cor(selected_vars, use = "complete.obs")
+
+corrplot(cor_matrix, method = "color", type = "lower", addCoef.col = "black", number.cex = 0.7,
+         title = "Correlation Matrix of Selected Variables", mar = c(0, 0, 1, 0))
+
+```
+
+主成分分析（PCA）
+```{r}
+# --- 提取脑连接特征矩阵 ---
+brain_data <- train_df %>% 
+  select(starts_with("V"))  # V1 到 V19899
+
+# --- 做 PCA，标准化所有变量 ---
+pca_result <- prcomp(brain_data, center = TRUE, scale. = TRUE)
+
+# --- 提取前两主成分，并合并性别信息 ---
+pca_df <- as.data.frame(pca_result$x[, 1:2])
+pca_df$sex <- train_df$sex
+
+# --- 画出二维主成分图 ---
+ggplot(pca_df, aes(x = PC1, y = PC2, color = sex)) +
+  geom_point(alpha = 0.5) +
+  labs(
+    title = "2D PCA Projection of Brain Functional Connectivity",
+    x = "Principal Component 1",
+    y = "Principal Component 2",
+    color = "Sex"
+  ) +
+  theme_minimal()
+```
+
+

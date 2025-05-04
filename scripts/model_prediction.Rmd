@@ -1,0 +1,359 @@
+---
+title: "WiDS Datathon++ 2025 - Modeling and Prediction"
+output:
+  html_document:
+    toc: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+set.seed(42)
+```
+
+# 1. 📦 加载必要包
+
+```{r}
+library(tidyverse)
+library(forcats)
+library(caret)
+library(glmnet)
+library(Metrics)
+library(ggplot2)
+library(xgboost)
+library(broom)
+library(doParallel)
+library(ParBayesianOptimization)
+```
+
+# 2. 🧹 数据读取与预处理
+
+```{r}
+df <- readRDS("train_df.rds")
+train_idx <- createDataPartition(df$sex, p = 0.8, list = FALSE)
+train <- df[train_idx, ]
+valid <- df[-train_idx, ]
+```
+
+# 3. 🔍 PCA降维（保留90%信息）
+
+```{r}
+pcs <- prcomp(select(train, starts_with("V")), center = TRUE, scale. = TRUE)
+explained_var <- summary(pcs)$importance[2, ]
+cum_explained <- cumsum(explained_var)
+n_pcs_90 <- which(cum_explained >= 0.90)[1]
+cat("✅ 建议保留的主成分数量:", n_pcs_90, "\n")
+
+train_pc <- as_tibble(pcs$x[, 1:n_pcs_90])
+valid_pc <- predict(pcs, select(valid, starts_with("V")) %>% scale(center = pcs$center, scale = pcs$scale))[, 1:n_pcs_90] %>% as_tibble()
+```
+
+# 4. 🧠 元数据处理 + 编码
+
+```{r}
+prepare_meta <- function(df) {
+  df %>%
+    select(participant_id, sex, bmi, p_factor_fs, internalizing_fs, externalizing_fs, attention_fs,
+           race, study_site, handedness, parent_1_education) %>%
+    mutate(
+      bmi = ifelse(is.na(bmi), median(bmi, na.rm = TRUE), bmi),
+      across(c(sex, race, study_site, handedness, parent_1_education), ~ fct_na_value_to_level(factor(.), "Missing"))
+    )
+}
+encode <- function(data) model.matrix(~ . -1, data = data)
+
+train_meta <- prepare_meta(train)
+valid_meta <- prepare_meta(valid)
+
+train_meta_enc <- bind_cols(as_tibble(encode(train_meta %>% select(-participant_id))), tibble(participant_id = train_meta$participant_id))
+valid_meta_enc <- bind_cols(as_tibble(encode(valid_meta %>% select(-participant_id))), tibble(participant_id = valid_meta$participant_id))
+```
+
+# 5. 🔗 合并PCA和元数据
+
+```{r}
+train_pc_df <- train_pc %>% mutate(participant_id = train$participant_id)
+valid_pc_df <- valid_pc %>% mutate(participant_id = valid$participant_id)
+
+train_merged <- inner_join(train_pc_df, train_meta_enc, by = "participant_id")
+valid_merged <- inner_join(valid_pc_df, valid_meta_enc, by = "participant_id")
+
+X_train <- train_merged %>% select(-participant_id)
+y_train <- train %>% filter(participant_id %in% train_merged$participant_id) %>% pull(age)
+X_valid <- valid_merged %>% select(-participant_id)
+y_valid <- valid %>% filter(participant_id %in% valid_merged$participant_id) %>% pull(age)
+```
+
+# 6. 🔎 Lasso特征选择（只针对Metadata）
+
+```{r}
+X_train_meta <- train_meta_enc %>% select(-participant_id)
+X_meta_mat <- as.matrix(X_train_meta)
+
+cv_lasso <- cv.glmnet(X_meta_mat, y_train, alpha = 1, nfolds = 10, standardize = TRUE, type.measure = "mse")
+lasso_coefs <- coef(cv_lasso, s = "lambda.min")
+lasso_selected <- rownames(lasso_coefs)[lasso_coefs[, 1] != 0 & rownames(lasso_coefs) != "(Intercept)"]
+
+cat("✅ 选中的重要metadata特征：\n")
+print(lasso_selected)
+```
+
+# 7. 📈 Ridge回归
+
+## 7.1 Ridge (全PCA+Metadata)
+
+```{r}
+X_train_mat <- as.matrix(X_train)
+X_valid_mat <- as.matrix(X_valid)
+# 手动创建固定的foldid
+set.seed(42)
+foldid <- sample(rep(1:10, length.out = length(y_train)))  # 10折分配
+
+# 用foldid跑cv_ridge
+cv_ridge <- cv.glmnet(
+  X_train_mat, y_train, 
+  alpha = 0, 
+  nfolds = 10,  # 不用改，保险
+  foldid = foldid,  # ⭐ 关键：传入固定的fold
+  standardize = TRUE,
+  type.measure = "mse"
+)
+
+ridge_pred <- predict(cv_ridge, newx = X_valid_mat, s = "lambda.min") %>% as.vector()
+ridge_rmse <- rmse(y_valid, ridge_pred)
+
+cat("✅ Ridge 回归验证集 RMSE:", round(ridge_rmse, 4), "\n")
+
+# 可视化
+ridge_plot <- ggplot(data.frame(Predicted = ridge_pred, Actual = y_valid), aes(x = Actual, y = Predicted)) +
+  geom_point(alpha = 0.5) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "blue") +
+  labs(title = "Ridge Regression: Predicted vs Actual Age") +
+  theme_minimal()
+print(ridge_plot)
+
+```
+
+## 7.2 Ridge (PCA + Lasso筛选Metadata)
+
+```{r}
+X_train_lasso_meta <- X_train_meta[, lasso_selected]
+X_valid_lasso_meta <- X_valid %>% select(all_of(colnames(X_train_lasso_meta)))
+
+X_train_lasso_pca <- cbind(train_pc, X_train_lasso_meta)
+X_valid_lasso_pca <- cbind(valid_pc, X_valid_lasso_meta)
+
+X_train_lasso_pca_mat <- as.matrix(X_train_lasso_pca)
+X_valid_lasso_pca_mat <- as.matrix(X_valid_lasso_pca)
+
+cv_ridge_lasso_pca <- cv.glmnet(X_train_lasso_pca_mat, y_train, alpha = 0, nfolds = 10, standardize = TRUE, type.measure = "mse")
+
+ridge_lasso_pca_pred <- predict(cv_ridge_lasso_pca, newx = X_valid_lasso_pca_mat, s = "lambda.min") %>% as.vector()
+ridge_lasso_pca_rmse <- rmse(y_valid, ridge_lasso_pca_pred)
+
+cat("✅ Ridge (Lasso Metadata + PCA) 验证集 RMSE:", round(ridge_lasso_pca_rmse, 4), "\n")
+```
+
+
+```{r}
+library(glmnet)
+library(caret)
+library(Metrics)
+
+# ✅ 准备 5-Fold 分割
+set.seed(42)
+folds <- createFolds(y_train, k = 5)
+
+# ✅ 存储每一折对 Validation Set 的预测
+ridge_preds <- list()
+
+# ✅ 每一折建模
+for (i in seq_along(folds)) {
+  fold_valid_idx <- folds[[i]]
+  X_tr <- X_train_lasso_pca[-fold_valid_idx, ]
+  y_tr <- y_train[-fold_valid_idx]
+  
+  ridge_model <- cv.glmnet(as.matrix(X_tr), y_tr, alpha = 0, nfolds = 5)
+  
+  ridge_pred <- predict(ridge_model, newx = as.matrix(X_valid_lasso_pca), s = "lambda.min") %>% as.vector()
+  ridge_preds[[i]] <- ridge_pred
+}
+
+# ✅ 计算平均预测 + 标准差
+ridge_matrix <- do.call(cbind, ridge_preds)
+ridge_lasso_pca_pred <- rowMeans(ridge_matrix)
+ridge_lasso_pca_sd <- apply(ridge_matrix, 1, sd)  # 可用于残差稳定性分析
+
+# ✅ 计算 RMSE
+ridge_lasso_pca_rmse <- rmse(y_valid, ridge_lasso_pca_pred)
+
+cat("✅ Ridge (5-Fold Averaging) 验证集 RMSE:", round(ridge_lasso_pca_rmse, 4), "\n")
+
+# ✅ 可视化
+ggplot(data.frame(Predicted = ridge_lasso_pca_pred, Actual = y_valid), aes(x = Actual, y = Predicted)) +
+  geom_point(alpha = 0.5) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "blue") +
+  labs(title = "Ridge (5-Fold Ensemble): Predicted vs Actual Age") +
+  theme_minimal()
+
+```
+
+
+# 8. 🤖 XGBoost建模（Bayesian Optimization）
+
+```{r}
+library(xgboost)
+library(ParBayesianOptimization)
+
+set.seed(42)
+dtrain <- xgb.DMatrix(data = as.matrix(X_train), label = y_train)
+dvalid <- xgb.DMatrix(data = as.matrix(X_valid), label = y_valid)
+
+bayes_xgb_function <- function(eta, max_depth) {
+  set.seed(42)  # ⭐ 加在这里！每次调参保证同样初始化
+  params <- list(
+    booster = "gbtree", objective = "reg:squarederror", eval_metric = "rmse",
+    tree_method = "hist", eta = eta, max_depth = as.integer(max_depth),
+    subsample = 0.8, colsample_bytree = 0.8
+  )
+  model <- xgb.train(params, data = dtrain, nrounds = 100, watchlist = list(valid = dvalid),
+                     early_stopping_rounds = 10, verbose = 0)
+  list(Score = -rmse(y_valid, predict(model, dvalid)))
+}
+
+
+opt <- bayesOpt(
+  FUN = bayes_xgb_function,
+  bounds = list(
+    eta = c(0.03, 0.1),
+    max_depth = c(3L, 6L)
+  ),
+  initPoints = 5, iters.n = 10, acq = "ucb", verbose = 1
+)
+
+best_params <- getBestPars(opt)
+
+xgb_final <- xgb.train(
+  params = list(
+    booster = "gbtree", objective = "reg:squarederror", eval_metric = "rmse",
+    eta = best_params$eta, max_depth = as.integer(best_params$max_depth),
+    subsample = 0.8, colsample_bytree = 0.8, tree_method = "hist"
+  ),
+  data = dtrain, nrounds = 200, watchlist = list(valid = dvalid),
+  early_stopping_rounds = 10, verbose = 1
+)
+
+xgb_pred <- predict(xgb_final, newdata = dvalid)
+xgb_rmse <- rmse(y_valid, xgb_pred)
+
+cat("✅ Final Tuned XGBoost 验证集 RMSE:", round(xgb_rmse, 4), "\n")
+
+# 可视化
+xgb_plot <- ggplot(data.frame(Predicted = xgb_pred, Actual = y_valid), aes(x = Actual, y = Predicted)) +
+  geom_point(alpha = 0.5, color = "#1f77b4") +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "darkgray") +
+  labs(title = "Tuned XGBoost (Bayesian Optimization)", x = "Actual Age", y = "Predicted Age") +
+  theme_minimal()
+print(xgb_plot)
+```
+
+# 9. 🔁 模型融合：Ridge + XGBoost
+
+```{r}
+weights <- seq(0, 0.95, by = 0.05)
+ensemble_rmse <- sapply(weights, function(w) {
+  rmse(y_valid, w * ridge_lasso_pca_pred + (1 - w) * xgb_pred)
+})
+
+best_w <- weights[which.min(ensemble_rmse)]
+cat("✅ 最佳融合权重 w =", best_w, "对应 RMSE =", round(min(ensemble_rmse), 4), "\n")
+
+# 融合可视化
+ensemble_plot <- ggplot(data.frame(Weight = weights, RMSE = ensemble_rmse), aes(x = Weight, y = RMSE)) +
+  geom_line() +
+  geom_point() +
+  geom_vline(xintercept = best_w, linetype = "dashed", color = "red") +
+  labs(title = "Ensemble Weight vs Validation RMSE", x = "Ridge Weight", y = "Validation RMSE") +
+  theme_minimal()
+print(ensemble_plot)
+```
+
+
+
+
+```{r}
+# Ridge 残差图
+resid_ridge <- y_valid - ridge_lasso_pca_pred
+ggplot(data.frame(Residual = resid_ridge), aes(x = Residual)) +
+  geom_histogram(bins = 30, fill = "steelblue", alpha = 0.7) +
+  theme_minimal() +
+  labs(title = "Ridge Residual Distribution", x = "Residual (y - y_hat)", y = "Count")
+
+# XGBoost 残差图
+resid_xgb <- y_valid - xgb_pred
+ggplot(data.frame(Residual = resid_xgb), aes(x = Residual)) +
+  geom_histogram(bins = 30, fill = "darkorange", alpha = 0.7) +
+  theme_minimal() +
+  labs(title = "XGBoost Residual Distribution", x = "Residual (y - y_hat)", y = "Count")
+
+# 融合模型残差图
+resid_ensemble <- y_valid - (best_w * ridge_lasso_pca_pred + (1 - best_w) * xgb_pred)
+ggplot(data.frame(Residual = resid_ensemble), aes(x = Residual)) +
+  geom_histogram(bins = 30, fill = "darkgreen", alpha = 0.7) +
+  theme_minimal() +
+  labs(title = "Ensemble Residual Distribution", x = "Residual", y = "Count")
+
+```
+
+```{r}
+library(e1071)
+
+# 假设 residuals 都是向量
+ridge_resid <- ridge_pred - y_valid
+xgb_resid   <- xgb_pred   - y_valid
+ensemble_resid <- best_w * ridge_pred + (1 - best_w) * xgb_pred - y_valid
+
+resid_stats <- tibble(
+  Model     = c("Ridge", "XGBoost", "Ensemble"),
+  Skewness  = c(skewness(ridge_resid), skewness(xgb_resid), skewness(ensemble_resid)),
+  Kurtosis  = c(kurtosis(ridge_resid), kurtosis(xgb_resid), kurtosis(ensemble_resid))
+)
+
+print(resid_stats)
+
+```
+
+
+```{r}
+library(glmnet)
+
+# 1. 构建二级训练数据
+stack_train <- data.frame(
+  Ridge = ridge_lasso_pca_pred,
+  XGB = xgb_pred
+)
+
+dstack <- xgb.DMatrix(as.matrix(stack_train), label = y_valid)
+
+meta_xgb <- xgb.train(
+  params = list(
+    booster = "gbtree",
+    objective = "reg:squarederror",
+    eta = 0.05,
+    max_depth = 2,
+    subsample = 1,
+    colsample_bytree = 1,
+    eval_metric = "rmse"
+  ),
+  data = dstack,
+  nrounds = 100,
+  verbose = 0
+)
+
+final_pred <- predict(meta_xgb, newdata = dstack)
+stacking_rmse <- rmse(y_valid, final_pred)
+cat("✅ Upgraded Stacking Ensemble 验证集 RMSE:", round(stacking_rmse, 4), "\n")
+```
+
+
+------------------------------------------------------------------------
