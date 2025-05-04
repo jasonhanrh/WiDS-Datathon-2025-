@@ -76,7 +76,6 @@ Please extract the files and place them under the `data/` directory as expected 
 ## 🧑‍💻 Team
 
 - **Ruihang (Jason) Han** – Lead developer; responsible for modeling, connectome analysis, sex differences evaluation, and final report writing  
-- **Chenran Zhang** – Exploratory data analysis (EDA), visualization
 
 Affiliation: *Boston University – MSSP Program*
 
