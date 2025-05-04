@@ -24,6 +24,17 @@ Total samples: **1,104 participants**, aged **5–21 years**.
 
 ---
 
+## 📥 Data Access
+
+Due to file size constraints on GitHub, the processed dataset and feature objects are hosted externally.  
+You can access the full data here:
+
+🔗 **[Download Dataset via Google Drive](https://drive.google.com/file/d/18OlhYsBhKMPMAnVgOEExktnMis4LBHJ_/view?usp=drive_link)**
+
+Please extract the files and place them under the `data/` directory as expected by the R Markdown scripts.
+
+---
+
 ## ⚙️ Methods
 
 ### 🔢 Preprocessing
@@ -61,37 +72,16 @@ Total samples: **1,104 participants**, aged **5–21 years**.
 
 ---
 
-## 📁 Repository Structure
-
-```
-├── data/                      # Input data files (not included here due to privacy)
-├── scripts/                   # Supporting scripts for modeling & visualization
-├── report/                    # R Markdown report (.Rmd + HTML output)
-├── figs/                      # Output plots and graphs
-├── models/                    # Saved model objects (optional)
-├── README.md                  # Project summary and usage
-└── requirements.txt           # R package dependencies (for renv or manual install)
-```
-
----
-
-
 
 ## 🧑‍💻 Team
 
 - **Ruihang (Jason) Han** – Lead developer; responsible for modeling, connectome analysis, sex differences evaluation, and final report writing  
-- **Chenran Zhang** – Exploratory data analysis (EDA) ,visualization
-
+- **Chenran Zhang** – Exploratory data analysis (EDA), visualization
 
 Affiliation: *Boston University – MSSP Program*
 
 ---
 
-## 📜 License
-
-This project is licensed under the MIT License – see the `LICENSE` file for details.
-
----
 
 ## 📬 Acknowledgments
 
