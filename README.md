@@ -29,7 +29,7 @@ Total samples: **1,104 participants**, aged **5–21 years**.
 Due to file size constraints on GitHub, the processed dataset and feature objects are hosted externally.  
 You can access the full data here:
 
-🔗 **[Download Dataset via Google Drive](https://drive.google.com/file/d/18OlhYsBhKMPMAnVgOEExktnMis4LBHJ_/view?usp=drive_link)**
+🔗 **[Download Dataset via Google Drive](https://drive.google.com/drive/folders/1lRgOqqrrCicmbDdlYQeesl7N3U0s_gzh?usp=drive_link)**
 
 Please extract the files and place them under the `data/` directory as expected by the R Markdown scripts.
 
