@@ -5,6 +5,10 @@ author: |
   Boston University  
   jasonhan@bu.edu
 
+  Chenran Zhang  
+  Boston University  
+  chenran@bu.edu
+
 date: "`r Sys.Date()`"
 output:
   pdf_document:
